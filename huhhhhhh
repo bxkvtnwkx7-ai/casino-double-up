@@ -1,41 +1,46 @@
--- Double Up (Final Rednet-Based, Live Radar Fix + Stable Player Tracking)
+-- Double Up (Final Rednet-Based, Radar Fixed + Clean Betting UI)
 
--- Peripheral Setup
+-- =========================
+-- PERIPHERALS
+-- =========================
 local main = peripheral.wrap("monitor_968")
 local bid  = peripheral.wrap("monitor_966")
 local act  = peripheral.wrap("monitor_967")
 local radar = peripheral.wrap("radar_43")
 local speaker = peripheral.find("speaker") or peripheral.find("jukebox")
 
--- Rednet Modem & Account Computer ID
 local modem = peripheral.find("modem")
 if not modem then error("No modem found") end
 rednet.open(peripheral.getName(modem))
+
 local ACCOUNT_ID = 8166
 
--- Constants
+-- =========================
+-- CONFIG
+-- =========================
 local RISK_CHANCE = 45
 local betOptions = {100, 200, 300, 400, 500}
 local MAX_INITIAL_DISTANCE = 8
 local MAX_DISTANCE = 6
 
 -- =========================
--- Helpers
+-- UI HELPERS
 -- =========================
-
 local function center(mon, y, txt, textColor, bgColor)
   local w, h = mon.getSize()
-  if y > h then return end
   mon.setCursorPos(math.max(1, math.floor(w / 2 - #txt / 2)), y)
   mon.setTextColor(textColor or colors.white)
   mon.setBackgroundColor(bgColor or colors.black)
-  mon.write(txt:sub(1, w))
+  mon.write(txt)
 end
 
+-- =========================
+-- ACCOUNT SYSTEM
+-- =========================
 local function getBal(name)
-  rednet.send(ACCOUNT_ID, {action = "get_balance", player = name}, "casino")
-  local id, msg = rednet.receive("casino", 2)
-  if type(msg) == "table" and msg.player == name then
+  rednet.send(ACCOUNT_ID, {action="get_balance", player=name}, "casino")
+  local _, msg = rednet.receive("casino", 2)
+  if type(msg) == "table" then
     return tonumber(msg.balance or 0)
   end
   return 0
@@ -43,22 +48,21 @@ end
 
 local function update(player, delta, note)
   rednet.send(ACCOUNT_ID, {
-    action = "transfer",
-    player = player,
-    delta = delta,
-    note = note or "DOUBLE UP!"
+    action="transfer",
+    player=player,
+    delta=delta,
+    note=note or "DOUBLE UP"
   }, "casino")
 end
 
 -- =========================
--- RADAR SYSTEM (FIXED)
+-- RADAR (FIXED LIVE SYSTEM)
 -- =========================
-
 local function getClosestPlayerLive(maxDist)
   if not radar then return nil end
 
   local players = radar.getPlayers()
-  if not players or #players == 0 then return nil end
+  if not players then return nil end
 
   local closest
 
@@ -78,8 +82,6 @@ local function getClosestPlayerLive(maxDist)
 end
 
 local function getPlayerDistance(name)
-  if not radar then return nil end
-
   local players = radar.getPlayers()
   if not players then return nil end
 
@@ -93,41 +95,47 @@ local function getPlayerDistance(name)
 end
 
 -- =========================
--- UI
+-- BETTING UI (FIXED BUTTONS)
 -- =========================
-
 local function showBettingUI(player, balance, bet)
   bid.setBackgroundColor(colors.lime)
-  bid.setTextColor(colors.purple)
   bid.clear()
-  center(bid, 1, "Player: " .. (player or "?"), colors.gray, colors.lime)
+
+  local w, _ = bid.getSize()
+
+  center(bid, 1, "Player: " .. player, colors.gray, colors.lime)
   center(bid, 2, "Balance: " .. balance, colors.gray, colors.lime)
   center(bid, 3, "Bet: " .. bet, colors.black, colors.lime)
-  center(bid, 4, "[<] Lower   Raise [>]", colors.purple, colors.pink)
+
+  bid.setBackgroundColor(colors.pink)
+
+  -- LEFT BUTTON
+  bid.setCursorPos(2, 5)
+  bid.write("< LOWER")
+
+  -- RIGHT BUTTON
+  bid.setCursorPos(w - 9, 5)
+  bid.write("RAISE >")
 end
 
 local function showActionUI()
   act.setBackgroundColor(colors.orange)
-  act.setTextColor(colors.cyan)
   act.clear()
-  center(act, 2, "[Enter]", colors.blue, colors.lightBlue)
-  center(act, 4, "[Cancel]", colors.blue, colors.lightBlue)
+  center(act, 2, "[ENTER]", colors.cyan, colors.orange)
+  center(act, 4, "[CANCEL]", colors.cyan, colors.orange)
 end
 
 -- =========================
--- BETTING SYSTEM (LIVE RADAR)
+-- BET SYSTEM (FIXED LOGIC)
 -- =========================
-
 local function getBet(player, balance)
   local index = 1
   local bet = betOptions[index]
-  local timeout = 30
   local startTime = os.clock()
 
   while true do
-    local liveName, liveDist = getClosestPlayerLive(MAX_INITIAL_DISTANCE)
+    local liveName = getClosestPlayerLive(MAX_INITIAL_DISTANCE)
 
-    -- LIVE PLAYER SWITCHING
     if liveName then
       player = liveName
       balance = getBal(player)
@@ -136,50 +144,40 @@ local function getBet(player, balance)
     showBettingUI(player, balance, bet)
     showActionUI()
 
-    if os.clock() - startTime >= timeout then
-      main.clear()
-      center(main, 2, "Timed out", colors.yellow, colors.blue)
-      sleep(2)
+    if os.clock() - startTime > 30 then
       return nil
     end
 
     local dist = getPlayerDistance(player)
     if not dist or dist > MAX_INITIAL_DISTANCE then
-      main.clear()
-      center(main, 2, "Player left area", colors.yellow, colors.blue)
-      sleep(2)
       return nil
     end
 
     local event, side, x, y = os.pullEvent("monitor_touch")
 
     if side == peripheral.getName(bid) then
-      if y == 3 then
-        if x <= 6 then index = math.max(1, index - 1)
-        elseif x >= 12 then index = math.min(#betOptions, index + 1) end
+      local w, _ = bid.getSize()
+
+      -- LOWER BUTTON (fixed zone)
+      if y == 5 and x >= 2 and x <= 9 then
+        index = math.max(1, index - 1)
         bet = betOptions[index]
         startTime = os.clock()
 
-      elseif y == 4 then
-        index = #betOptions
+      -- RAISE BUTTON (fixed zone)
+      elseif y == 5 and x >= (w - 9) and x <= w then
+        index = math.min(#betOptions, index + 1)
         bet = betOptions[index]
         startTime = os.clock()
       end
+    end
 
-    elseif side == peripheral.getName(act) then
+    if side == peripheral.getName(act) then
       if y == 2 then
-        if bet > balance then
-          main.clear()
-          center(main, 2, "Insufficient funds", colors.yellow, colors.blue)
-          sleep(2)
-        else
+        if bet <= balance then
           return player, bet
         end
-
       elseif y == 4 then
-        main.clear()
-        center(main, 2, "Bet Cancelled", colors.yellow, colors.blue)
-        sleep(2)
         return nil
       end
     end
@@ -187,86 +185,51 @@ local function getBet(player, balance)
 end
 
 -- =========================
--- DOUBLE OR CASH
--- =========================
-
-local function doubleOrCash(player, winnings)
-  act.clear()
-  center(act, 2, "Winnings: " .. winnings, colors.cyan, colors.orange)
-  center(act, 3, "< DOUBLE | CASH >", colors.blue, colors.lightBlue)
-
-  while true do
-    local _, side, x, y = os.pullEvent("monitor_touch")
-    if side == peripheral.getName(act) and y == 3 then
-      return (x < 9) and "double" or "cash"
-    end
-  end
-end
-
-local function flip()
-  return math.random(100) <= RISK_CHANCE
-end
-
--- =========================
 -- MAIN LOOP
 -- =========================
-
 while true do
   local lockedPlayer = nil
 
-  -- WAIT FOR PLAYER (LIVE RADAR)
   while not lockedPlayer do
-    local name, dist = getClosestPlayerLive(MAX_INITIAL_DISTANCE)
+    local name = getClosestPlayerLive(MAX_INITIAL_DISTANCE)
 
-    if not name then
-      main.clear()
-      center(main, 2, "DOUBLE UP", colors.yellow, colors.blue)
-      center(main, 4, "Approach machine...", colors.yellow, colors.blue)
-      sleep(0.2)
-    else
+    if name then
       lockedPlayer = name
       main.clear()
       center(main, 2, "READY: " .. name, colors.yellow, colors.blue)
-      sleep(0.2)
+    else
+      main.clear()
+      center(main, 2, "DOUBLE UP", colors.yellow, colors.blue)
+      center(main, 4, "Step closer...", colors.yellow, colors.blue)
     end
+
+    sleep(0.2)
   end
 
   local bal = getBal(lockedPlayer)
   local player, bet = getBet(lockedPlayer, bal)
 
   if player and bet then
-    update(player, -bet, "double-up bet")
+    update(player, -bet, "bet")
 
     local winnings = bet
     local stage = 0
 
     while stage < 6 do
-      local distNow = getPlayerDistance(player)
-      if not distNow or distNow > MAX_DISTANCE then
-        center(main, 15, "Player left... continuing", colors.yellow, colors.blue)
-      end
-
       stage = stage + 1
 
-      if flip() then
+      if math.random(100) <= RISK_CHANCE then
         winnings = winnings * 2
+        center(main, 3, "WIN: " .. winnings, colors.green, colors.blue)
 
-        center(main, 13, "WIN! " .. winnings, colors.green, colors.blue)
         sleep(1)
 
         if stage == 6 then
           update(player, winnings, "jackpot")
           break
         end
-
-        local choice = doubleOrCash(player, winnings)
-        if choice == "cash" then
-          update(player, winnings, "cash out")
-          break
-        end
-
       else
-        center(main, 13, "LOSS!", colors.red, colors.blue)
+        center(main, 3, "LOSS", colors.red, colors.blue)
         sleep(2)
         break
       end
